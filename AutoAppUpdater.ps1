@@ -16,7 +16,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-$UpdaterVersion = [version]"2.1.2"
+$UpdaterVersion = [version]"2.2.0"
 $RepositoryRawBase = "https://raw.githubusercontent.com/RileyBeenders/RB-s-Auto-App-Updater/main"
 $VersionManifestUrl = "$RepositoryRawBase/version.json"
 $UpdaterScriptUrl = "$RepositoryRawBase/AutoAppUpdater.ps1"
@@ -155,9 +155,10 @@ function Write-ColoredStatusLine {
 Write-Host "==========================================" -ForegroundColor Blue
 Write-Host "          RB's App Auto Updater" -ForegroundColor White
 Write-Host "==========================================" -ForegroundColor Blue
-Write-Host "  Version: 2.1.1" -ForegroundColor White
-Write-Host "  Notes:" -ForegroundColor White
-Write-Host "    - Testing to see if updates work correctly." -ForegroundColor Gray
+Write-Host "       Version: 2.2.0" -ForegroundColor White
+Write-Host "  Release Date: 2026-09-20" -ForegroundColor White
+Write-Host " Notes:" -ForegroundColor White
+Write-Host "    - Implemented self-update functionality" -ForegroundColor Gray
 Write-Host ""
 
 # ------------------------------------------------------------
