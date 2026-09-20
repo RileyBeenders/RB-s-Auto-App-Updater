@@ -71,7 +71,9 @@ This repository normalizes text files to LF line endings. Therefore, a hash calc
 
 ### 3. Hash the file served by GitHub
 
-Run the following in PowerShell after the updated script is visible on `main`:
+Run the following in PowerShell after the updated script is visible on `main`.
+
+> **Wait a few minutes after pushing.** `raw.githubusercontent.com` caches files for up to about five minutes, so hashing immediately after a push can return the *previous* version of the script. Confirm the download contains your change (for example, the new `$UpdaterVersion`) before trusting the hash.
 
 ```powershell
 $url = "https://raw.githubusercontent.com/RileyBeenders/RB-s-Auto-App-Updater/main/AutoAppUpdater.ps1"
@@ -83,7 +85,16 @@ Remove-Item $temp
 
 Copy the entire 64-character result.
 
-Because this repository stores the script with LF line endings, hashing the committed local file gives the same value as long as the working copy is LF (`git ls-files --eol AutoAppUpdater.ps1` shows `w/lf`).
+Alternatively, hash the committed file directly from git. This avoids the CDN cache entirely and always matches what GitHub will serve, because the repository stores the script with LF line endings:
+
+```powershell
+$t = New-TemporaryFile
+cmd /c "git show HEAD:AutoAppUpdater.ps1 > `"$t`""
+(Get-FileHash $t -Algorithm SHA256).Hash.ToLower()
+Remove-Item $t
+```
+
+The `cmd /c` redirect is deliberate: piping `git show` through PowerShell rewrites the line endings and produces a different hash.
 
 ### 4. Update `version.json`
 
