@@ -18,10 +18,10 @@ A Windows PowerShell utility that checks installed applications with WinGet, pre
 Run this one-line command in PowerShell:
 
 ```powershell
-$p=Join-Path $env:TEMP 'RB-App-Auto-Updater.ps1'; Invoke-WebRequest 'https://raw.githubusercontent.com/RileyBeenders/RB-s-Auto-App-Updater/main/AutoAppUpdater.ps1' -OutFile $p; powershell.exe -NoProfile -ExecutionPolicy Bypass -File $p
+irm https://raw.githubusercontent.com/RileyBeenders/RB-s-Auto-App-Updater/main/install.ps1 | iex
 ```
 
-Approve the one-time administrator prompt, then use the **App Auto Updater** shortcut created on the desktop.
+`install.ps1` reads `version.json`, downloads the published `AutoAppUpdater.ps1`, verifies its SHA-256 hash against the manifest, and only then runs setup. Approve the one-time administrator prompt, then use the **App Auto Updater** shortcut created on the desktop.
 
 The setup installs protected worker scripts under:
 
@@ -58,7 +58,7 @@ If GitHub cannot be reached or verification fails, the installed updater is reta
 Change `$UpdaterVersion` near the beginning of `AutoAppUpdater.ps1`:
 
 ```powershell
-$UpdaterVersion = [version]"2.1.1"
+$UpdaterVersion = [version]"2.1.2"
 ```
 
 Finish every other script change before generating the hash. Any later change to the script will produce a different SHA-256 value.
@@ -83,13 +83,15 @@ Remove-Item $temp
 
 Copy the entire 64-character result.
 
+Because this repository stores the script with LF line endings, hashing the committed local file gives the same value as long as the working copy is LF (`git ls-files --eol AutoAppUpdater.ps1` shows `w/lf`).
+
 ### 4. Update `version.json`
 
 Set `version` to the same version used by `$UpdaterVersion`, paste the published script's hash into `sha256`, and update the publication date:
 
 ```json
 {
-  "version": "2.1.1",
+  "version": "2.1.2",
   "script": "AutoAppUpdater.ps1",
   "sha256": "PASTE_THE_64_CHARACTER_HASH_HERE",
   "published": "2026-09-20"
