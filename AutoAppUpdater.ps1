@@ -16,7 +16,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-$UpdaterVersion = [version]"2.1.1"
+$UpdaterVersion = [version]"2.1.2"
 $RepositoryRawBase = "https://raw.githubusercontent.com/RileyBeenders/RB-s-Auto-App-Updater/main"
 $VersionManifestUrl = "$RepositoryRawBase/version.json"
 $UpdaterScriptUrl = "$RepositoryRawBase/AutoAppUpdater.ps1"
