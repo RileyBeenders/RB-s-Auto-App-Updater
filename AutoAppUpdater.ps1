@@ -216,6 +216,25 @@ if (-not $SkipUpdateCheck) {
                     throw "The updater update exceeded the 15-minute timeout."
                 }
 
+                try {
+                    $SelfUpdateTaskState = (
+                        Get-ScheduledTask -TaskName $SelfUpdateTaskName -ErrorAction Stop
+                    ).State
+
+                    if (
+                        $SelfUpdateTaskState -ne "Running" -and
+                        ((Get-Date) - $SelfUpdateStarted).TotalSeconds -gt 5 -and
+                        -not (Test-Path $SelfUpdateDoneFile)
+                    ) {
+                        throw "The self-update task stopped before reporting a result."
+                    }
+                }
+                catch {
+                    if ($_.Exception.Message -eq "The self-update task stopped before reporting a result.") {
+                        throw
+                    }
+                }
+
                 Start-Sleep -Milliseconds 350
             }
 
