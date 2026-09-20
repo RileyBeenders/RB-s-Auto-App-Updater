@@ -13,6 +13,18 @@ A Windows PowerShell utility that checks installed applications with WinGet, pre
 - Automatic updater self-check before the WinGet application chart
 - SHA-256 verification before an updater release is installed
 
+## How it works
+
+Administrator rights are granted once, during setup, by registering two scheduled tasks that run with highest privileges. Every later launch starts as a plain non-elevated launcher and triggers those pre-approved tasks, so there are no further UAC prompts. Both the installer and the self-updater refuse to install anything whose SHA-256 hash does not match `version.json`.
+
+### One-time install
+
+![Install flow](docs/install-flow.svg)
+
+### Every launch
+
+![Everyday run flow](docs/run-flow.svg)
+
 ## Install
 
 Run this one-line command in PowerShell:
