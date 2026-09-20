@@ -6,11 +6,20 @@
 # Then right-click the .ps1 file and choose "Run with PowerShell".
 # Run this setup again whenever you want to reinstall or update the updater.
 
+param(
+    [switch]$SelfUpdate
+)
+
 # ============================================================
 # App Auto Updater v2 - One-Time Setup
 # ============================================================
 
 $ErrorActionPreference = "Stop"
+
+$UpdaterVersion = [version]"2.1.0"
+$RepositoryRawBase = "https://raw.githubusercontent.com/RileyBeenders/RB-s-Auto-App-Updater/main"
+$VersionManifestUrl = "$RepositoryRawBase/version.json"
+$UpdaterScriptUrl = "$RepositoryRawBase/AutoAppUpdater.ps1"
 
 # ------------------------------------------------------------
 # Elevate this setup script once
@@ -24,8 +33,10 @@ if (-not $PrincipalCheck.IsInRole(
 )) {
     Write-Host "Administrator permission is required for initial setup."
 
+    $SelfUpdateArgument = if ($SelfUpdate) { " -SelfUpdate" } else { "" }
+
     Start-Process powershell.exe `
-        -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`"" `
+        -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`"$SelfUpdateArgument" `
         -Verb RunAs
 
     exit
@@ -36,6 +47,7 @@ if (-not $PrincipalCheck.IsInRole(
 # ------------------------------------------------------------
 
 $TaskName = "WinGet Silent Upgrade"
+$SelfUpdateTaskName = "RB App Auto Updater Self Update"
 
 $AppFolder     = Join-Path $env:LOCALAPPDATA "WingetUpdater"
 $LauncherPath  = Join-Path $AppFolder "WingetUpdater.ps1"
@@ -46,6 +58,8 @@ $ShortcutPath  = Join-Path $DesktopPath "App Auto Updater.lnk"
 # non-elevated processes cannot modify it without UAC approval.
 $InstallFolder = Join-Path $env:ProgramFiles "RB App Auto Updater"
 $WorkerPath    = Join-Path $InstallFolder "WingetUpdaterWorker.ps1"
+$SelfUpdateBootstrapPath = Join-Path $InstallFolder "WingetUpdaterSelfUpdate.ps1"
+$VersionFile = Join-Path $AppFolder "updater-version.txt"
 
 # ------------------------------------------------------------
 # Make sure WinGet exists
@@ -71,23 +85,38 @@ Write-Host ""
 New-Item -ItemType Directory -Path $AppFolder -Force | Out-Null
 New-Item -ItemType Directory -Path $InstallFolder -Force | Out-Null
 
+Set-Content `
+    -Path $VersionFile `
+    -Value $UpdaterVersion.ToString() `
+    -Encoding ASCII
+
 # ============================================================
 # CREATE USER-FACING LAUNCHER
 # ============================================================
 
 $LauncherScript = @'
+param(
+    [switch]$SkipUpdateCheck
+)
+
 $Host.UI.RawUI.WindowTitle = "App Auto Updater"
 
 Clear-Host
 
 $TaskName = "WinGet Silent Upgrade"
+$SelfUpdateTaskName = "RB App Auto Updater Self Update"
 $AppFolder = Join-Path $env:LOCALAPPDATA "WingetUpdater"
+$LauncherPath = Join-Path $AppFolder "WingetUpdater.ps1"
+$InstalledUpdaterVersion = [version]"__UPDATER_VERSION__"
+$VersionManifestUrl = "__VERSION_MANIFEST_URL__"
 
 $StatusFile   = Join-Path $AppFolder "status.log"
 $ResultFile   = Join-Path $AppFolder "worker-result.json"
 $DoneFile     = Join-Path $AppFolder "done.flag"
 $DetailLog    = Join-Path $AppFolder "winget-details.log"
 $ProgressFile = Join-Path $AppFolder "progress.json"
+$SelfUpdateProgressFile = Join-Path $AppFolder "self-update-progress.json"
+$SelfUpdateDoneFile = Join-Path $AppFolder "self-update-done.json"
 
 function Write-ColoredStatusLine {
     param([string]$Line)
@@ -125,6 +154,121 @@ Write-Host "==========================================" -ForegroundColor Blue
 Write-Host "          RB's App Auto Updater" -ForegroundColor White
 Write-Host "==========================================" -ForegroundColor Blue
 Write-Host ""
+
+# ------------------------------------------------------------
+# Check for an updater release before scanning applications
+# ------------------------------------------------------------
+
+if (-not $SkipUpdateCheck) {
+    try {
+        Write-Host "Checking for updater updates..." -ForegroundColor Cyan
+
+        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+
+        $ManifestResponse = Invoke-WebRequest `
+            -Uri $VersionManifestUrl `
+            -UseBasicParsing `
+            -Headers @{ "User-Agent" = "RB-App-Auto-Updater" } `
+            -TimeoutSec 15
+
+        $RemoteManifest = $ManifestResponse.Content | ConvertFrom-Json
+        $RemoteVersion = [version]$RemoteManifest.version
+
+        if ($RemoteVersion -gt $InstalledUpdaterVersion) {
+            Write-Host "Updater version $RemoteVersion is available." -ForegroundColor Green
+            Write-Host "Installing the updater update before checking applications..." -ForegroundColor Green
+            Write-Host ""
+
+            Remove-Item $SelfUpdateProgressFile -Force -ErrorAction SilentlyContinue
+            Remove-Item $SelfUpdateDoneFile -Force -ErrorAction SilentlyContinue
+
+            Start-ScheduledTask -TaskName $SelfUpdateTaskName -ErrorAction Stop
+
+            $SelfUpdateStarted = Get-Date
+            $SelfUpdateTimeout = New-TimeSpan -Minutes 15
+
+            while (-not (Test-Path $SelfUpdateDoneFile)) {
+                if (Test-Path $SelfUpdateProgressFile) {
+                    try {
+                        $UpdateProgress = Get-Content $SelfUpdateProgressFile -Raw -ErrorAction Stop |
+                            ConvertFrom-Json -ErrorAction Stop
+
+                        $UpdatePercent = [int]$UpdateProgress.Percent
+
+                        if ($UpdatePercent -lt 0) {
+                            $UpdatePercent = 0
+                        }
+                        elseif ($UpdatePercent -gt 100) {
+                            $UpdatePercent = 100
+                        }
+
+                        Write-Progress `
+                            -Activity "Updating RB's App Auto Updater..." `
+                            -Status ([string]$UpdateProgress.Message) `
+                            -PercentComplete $UpdatePercent
+                    }
+                    catch {
+                        # The elevated updater may be replacing the JSON file.
+                    }
+                }
+
+                if (((Get-Date) - $SelfUpdateStarted) -gt $SelfUpdateTimeout) {
+                    throw "The updater update exceeded the 15-minute timeout."
+                }
+
+                try {
+                    $SelfUpdateTaskState = (
+                        Get-ScheduledTask -TaskName $SelfUpdateTaskName -ErrorAction Stop
+                    ).State
+
+                    if (
+                        $SelfUpdateTaskState -ne "Running" -and
+                        ((Get-Date) - $SelfUpdateStarted).TotalSeconds -gt 5 -and
+                        -not (Test-Path $SelfUpdateDoneFile)
+                    ) {
+                        throw "The self-update task stopped before reporting a result."
+                    }
+                }
+                catch {
+                    if ($_.Exception.Message -eq "The self-update task stopped before reporting a result.") {
+                        throw
+                    }
+                }
+
+                Start-Sleep -Milliseconds 350
+            }
+
+            Write-Progress -Activity "Updating RB's App Auto Updater..." -Completed
+
+            $SelfUpdateResult = Get-Content $SelfUpdateDoneFile -Raw -ErrorAction Stop |
+                ConvertFrom-Json -ErrorAction Stop
+
+            if (-not [bool]$SelfUpdateResult.Success) {
+                throw "Updater update failed: $($SelfUpdateResult.Error)"
+            }
+
+            Write-Host "Updater successfully updated to version $RemoteVersion." -ForegroundColor Green
+            Write-Host "Continuing with the refreshed updater..." -ForegroundColor Green
+            Write-Host ""
+
+            Start-Process powershell.exe `
+                -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$LauncherPath`" -SkipUpdateCheck"
+
+            exit
+        }
+        else {
+            Write-Host "Updater is current (version $InstalledUpdaterVersion)." -ForegroundColor DarkGray
+            Write-Host ""
+        }
+    }
+    catch {
+        Write-Progress -Activity "Updating RB's App Auto Updater..." -Completed
+        Write-Host "Updater update check could not be completed." -ForegroundColor Yellow
+        Write-Host $_.Exception.Message -ForegroundColor DarkYellow
+        Write-Host "Continuing with installed version $InstalledUpdaterVersion." -ForegroundColor Yellow
+        Write-Host ""
+    }
+}
 
 try {
     $Winget = (Get-Command winget.exe -ErrorAction Stop).Source
@@ -593,6 +737,16 @@ Write-Host ""
 Read-Host "Press Enter to close"
 exit
 '@
+
+$LauncherScript = $LauncherScript.Replace(
+    "__UPDATER_VERSION__",
+    $UpdaterVersion.ToString()
+)
+
+$LauncherScript = $LauncherScript.Replace(
+    "__VERSION_MANIFEST_URL__",
+    $VersionManifestUrl
+)
 
 Set-Content `
     -Path $LauncherPath `
@@ -1242,6 +1396,193 @@ Set-Content `
     -Encoding UTF8
 
 # ============================================================
+# CREATE PROTECTED SELF-UPDATE BOOTSTRAP
+# ============================================================
+
+$SelfUpdateBootstrap = @'
+$ErrorActionPreference = "Stop"
+
+$VersionManifestUrl = "__VERSION_MANIFEST_URL__"
+$UpdaterScriptUrl = "__UPDATER_SCRIPT_URL__"
+
+$AppFolder = Join-Path $env:LOCALAPPDATA "WingetUpdater"
+$InstallFolder = Join-Path $env:ProgramFiles "RB App Auto Updater"
+$StagingFolder = Join-Path $InstallFolder "UpdateStaging"
+$DownloadedScript = Join-Path $StagingFolder "AutoAppUpdater.ps1"
+
+$ProgressFile = Join-Path $AppFolder "self-update-progress.json"
+$DoneFile = Join-Path $AppFolder "self-update-done.json"
+
+function Write-SelfUpdateProgress {
+    param(
+        [int]$Percent,
+        [string]$Message,
+        [long]$BytesDownloaded = 0,
+        [long]$TotalBytes = 0
+    )
+
+    [PSCustomObject]@{
+        Percent = $Percent
+        Message = $Message
+        BytesDownloaded = $BytesDownloaded
+        TotalBytes = $TotalBytes
+        Updated = (Get-Date).ToString("o")
+    } |
+        ConvertTo-Json -Compress |
+        Set-Content -Path $ProgressFile -Encoding UTF8
+}
+
+function Download-FileWithProgress {
+    param(
+        [string]$Uri,
+        [string]$Destination,
+        [string]$Version
+    )
+
+    $Request = [System.Net.HttpWebRequest]::Create($Uri)
+    $Request.UserAgent = "RB-App-Auto-Updater"
+    $Request.AllowAutoRedirect = $true
+    $Request.Timeout = 60000
+    $Request.ReadWriteTimeout = 60000
+
+    $Response = $Request.GetResponse()
+    $InputStream = $Response.GetResponseStream()
+    $OutputStream = [System.IO.File]::Create($Destination)
+
+    try {
+        $TotalBytes = [long]$Response.ContentLength
+        $DownloadedBytes = [long]0
+        $Buffer = New-Object byte[] 65536
+
+        while (($BytesRead = $InputStream.Read($Buffer, 0, $Buffer.Length)) -gt 0) {
+            $OutputStream.Write($Buffer, 0, $BytesRead)
+            $DownloadedBytes += $BytesRead
+
+            if ($TotalBytes -gt 0) {
+                $DownloadPercent = [math]::Floor(($DownloadedBytes / $TotalBytes) * 85)
+            }
+            else {
+                $DownloadPercent = 25
+            }
+
+            $DownloadedMB = [math]::Round($DownloadedBytes / 1MB, 2)
+
+            if ($TotalBytes -gt 0) {
+                $TotalMB = [math]::Round($TotalBytes / 1MB, 2)
+                $Message = "Downloading updater $Version - $DownloadedMB MB of $TotalMB MB"
+            }
+            else {
+                $Message = "Downloading updater $Version - $DownloadedMB MB"
+            }
+
+            Write-SelfUpdateProgress `
+                -Percent ([Math]::Max(5, [Math]::Min(90, $DownloadPercent + 5))) `
+                -Message $Message `
+                -BytesDownloaded $DownloadedBytes `
+                -TotalBytes $TotalBytes
+        }
+    }
+    finally {
+        $OutputStream.Dispose()
+        $InputStream.Dispose()
+        $Response.Dispose()
+    }
+}
+
+try {
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+
+    New-Item -ItemType Directory -Path $AppFolder -Force | Out-Null
+    New-Item -ItemType Directory -Path $StagingFolder -Force | Out-Null
+
+    Remove-Item $DoneFile -Force -ErrorAction SilentlyContinue
+    Remove-Item $DownloadedScript -Force -ErrorAction SilentlyContinue
+
+    Write-SelfUpdateProgress -Percent 2 -Message "Checking the latest updater version..."
+
+    $ManifestResponse = Invoke-WebRequest `
+        -Uri $VersionManifestUrl `
+        -UseBasicParsing `
+        -Headers @{ "User-Agent" = "RB-App-Auto-Updater" } `
+        -TimeoutSec 30
+
+    $Manifest = $ManifestResponse.Content | ConvertFrom-Json
+    $RemoteVersion = [version]$Manifest.version
+    $ExpectedHash = ([string]$Manifest.sha256).Trim().ToUpperInvariant()
+
+    if ([string]::IsNullOrWhiteSpace($ExpectedHash)) {
+        throw "The update manifest does not contain a SHA-256 hash."
+    }
+
+    Download-FileWithProgress `
+        -Uri $UpdaterScriptUrl `
+        -Destination $DownloadedScript `
+        -Version $RemoteVersion.ToString()
+
+    Write-SelfUpdateProgress -Percent 92 -Message "Verifying the downloaded updater..."
+
+    $ActualHash = (Get-FileHash -Path $DownloadedScript -Algorithm SHA256).Hash.ToUpperInvariant()
+
+    if ($ActualHash -ne $ExpectedHash) {
+        throw "Security verification failed: the downloaded updater hash does not match version.json."
+    }
+
+    Write-SelfUpdateProgress -Percent 96 -Message "Installing updater $RemoteVersion..."
+
+    $PowerShellExe = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
+    $SetupArguments = "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$DownloadedScript`" -SelfUpdate"
+
+    $SetupProcess = Start-Process `
+        -FilePath $PowerShellExe `
+        -ArgumentList $SetupArguments `
+        -Wait `
+        -PassThru
+
+    if ($SetupProcess.ExitCode -ne 0) {
+        throw "The downloaded setup script returned exit code $($SetupProcess.ExitCode)."
+    }
+
+    Write-SelfUpdateProgress -Percent 100 -Message "Updater $RemoteVersion installed successfully."
+
+    [PSCustomObject]@{
+        Success = $true
+        Version = $RemoteVersion.ToString()
+        Error = $null
+    } |
+        ConvertTo-Json -Compress |
+        Set-Content -Path $DoneFile -Encoding UTF8
+}
+catch {
+    [PSCustomObject]@{
+        Success = $false
+        Version = $null
+        Error = $_.Exception.Message
+    } |
+        ConvertTo-Json -Compress |
+        Set-Content -Path $DoneFile -Encoding UTF8
+
+    exit 1
+}
+
+exit 0
+'@
+
+$SelfUpdateBootstrap = $SelfUpdateBootstrap.Replace(
+    "__VERSION_MANIFEST_URL__",
+    $VersionManifestUrl
+)
+
+$SelfUpdateBootstrap = $SelfUpdateBootstrap.Replace(
+    "__UPDATER_SCRIPT_URL__",
+    $UpdaterScriptUrl
+)
+
+Set-Content `
+    -Path $SelfUpdateBootstrapPath `
+    -Value $SelfUpdateBootstrap `
+    -Encoding UTF8
+
+# ============================================================
 # CREATE ELEVATED SCHEDULED TASK
 # ============================================================
 
@@ -1273,6 +1614,30 @@ Register-ScheduledTask `
     -Description "Runs WinGet upgrades individually and silently with elevated privileges. Failed packages are skipped." `
     -Force | Out-Null
 
+# Do not replace the self-update task while that same task is
+# actively installing an update. Its protected script path stays fixed.
+if (-not $SelfUpdate) {
+    $SelfUpdateTaskArguments = "-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$SelfUpdateBootstrapPath`""
+
+    $SelfUpdateAction = New-ScheduledTaskAction `
+        -Execute $PowerShellExe `
+        -Argument $SelfUpdateTaskArguments
+
+    $SelfUpdateSettings = New-ScheduledTaskSettingsSet `
+        -AllowStartIfOnBatteries `
+        -DontStopIfGoingOnBatteries `
+        -ExecutionTimeLimit (New-TimeSpan -Minutes 15) `
+        -MultipleInstances IgnoreNew
+
+    Register-ScheduledTask `
+        -TaskName $SelfUpdateTaskName `
+        -Action $SelfUpdateAction `
+        -Principal $Principal `
+        -Settings $SelfUpdateSettings `
+        -Description "Downloads verified updater releases from RileyBeenders/RB-s-Auto-App-Updater and installs them." `
+        -Force | Out-Null
+}
+
 # ============================================================
 # CREATE DESKTOP SHORTCUT
 # ============================================================
@@ -1300,11 +1665,16 @@ Write-Host "  $ShortcutPath"
 Write-Host ""
 Write-Host "Scheduled task created:"
 Write-Host "  $TaskName"
+Write-Host "  $SelfUpdateTaskName"
 Write-Host ""
 Write-Host "Installed worker:"
 Write-Host "  $WorkerPath"
 Write-Host ""
 Write-Host "Behavior:"
+Write-Host "  - Checks GitHub for updater updates before scanning apps"
+Write-Host "  - Shows live updater download and installation progress"
+Write-Host "  - Verifies the downloaded updater with SHA-256"
+Write-Host "  - Continues automatically in the refreshed updater"
 Write-Host "  - Updates are processed one at a time"
 Write-Host "  - Current package and queue progress are displayed"
 Write-Host "  - Current-package elapsed time updates live"
@@ -1320,5 +1690,9 @@ Write-Host "  - A final actionable summary is displayed"
 Write-Host "  - Detailed WinGet output is logged"
 Write-Host "  - No UAC prompt is required during normal use"
 Write-Host ""
+
+if ($SelfUpdate) {
+    exit 0
+}
 
 Read-Host "Press Enter to close"
