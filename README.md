@@ -15,10 +15,13 @@ A Windows PowerShell utility that checks installed applications with WinGet, pre
 
 ## Install
 
-1. Download `AutoAppUpdater.ps1`.
-2. Right-click it and select **Run with PowerShell**.
-3. Approve the one-time administrator prompt.
-4. Use the **App Auto Updater** shortcut created on the desktop.
+Run this one-line command in PowerShell:
+
+```powershell
+$p=Join-Path $env:TEMP 'RB-App-Auto-Updater.ps1'; Invoke-WebRequest 'https://raw.githubusercontent.com/RileyBeenders/RB-s-Auto-App-Updater/main/AutoAppUpdater.ps1' -OutFile $p; powershell.exe -NoProfile -ExecutionPolicy Bypass -File $p
+```
+
+Approve the one-time administrator prompt, then use the **App Auto Updater** shortcut created on the desktop.
 
 The setup installs protected worker scripts under:
 
@@ -44,18 +47,55 @@ If GitHub cannot be reached or verification fails, the installed updater is reta
 
 ## Publishing an updater version
 
-Update the version near the beginning of `AutoAppUpdater.ps1`:
+### 1. Update the script version
+
+Change `$UpdaterVersion` near the beginning of `AutoAppUpdater.ps1`:
 
 ```powershell
-$UpdaterVersion = [version]"2.2.0"
+$UpdaterVersion = [version]"2.1.1"
 ```
 
-Then calculate its SHA-256 hash:
+Finish every other script change before generating the hash. Any later change to the script will produce a different SHA-256 value.
+
+### 2. Publish the updated script
+
+Commit or upload `AutoAppUpdater.ps1` to `main`. Do not increase the version in `version.json` yet. Keeping the old manifest version temporarily prevents installed copies from downloading the script before its final hash is available.
+
+This repository normalizes text files to LF line endings. Therefore, a hash calculated from a local Windows/CRLF copy may not match the file GitHub distributes.
+
+### 3. Hash the file served by GitHub
+
+Run the following in PowerShell after the updated script is visible on `main`:
 
 ```powershell
-(Get-FileHash .\AutoAppUpdater.ps1 -Algorithm SHA256).Hash.ToLower()
+$url = "https://raw.githubusercontent.com/RileyBeenders/RB-s-Auto-App-Updater/main/AutoAppUpdater.ps1"
+$temp = New-TemporaryFile
+Invoke-WebRequest $url -OutFile $temp
+(Get-FileHash $temp -Algorithm SHA256).Hash.ToLower()
+Remove-Item $temp
 ```
 
-Update `version.json` with the matching version and hash in the same pull request. Do not publish a manifest hash that does not match the exact script bytes on the default branch.
+Copy the entire 64-character result.
+
+### 4. Update `version.json`
+
+Set `version` to the same version used by `$UpdaterVersion`, paste the published script's hash into `sha256`, and update the publication date:
+
+```json
+{
+  "version": "2.1.1",
+  "script": "AutoAppUpdater.ps1",
+  "sha256": "PASTE_THE_64_CHARACTER_HASH_HERE",
+  "published": "2026-09-20"
+}
+```
+
+The `script` value remains unchanged unless the PowerShell file is renamed.
+
+### 5. Publish the manifest
+
+Commit or upload `version.json` to `main`. Once the new manifest is visible, installed copies will detect the higher version, download the published script, verify its hash, install it, and continue with the normal WinGet workflow.
+
+If the updater reports that verification failed and continues with the installed version, calculate the hash from the raw GitHub URL again and compare it with `version.json`.
 
 > The hash protects against incomplete or mismatched downloads. Because the script and manifest are hosted in the same repository, repository access must remain protected with strong GitHub account security and branch controls.
