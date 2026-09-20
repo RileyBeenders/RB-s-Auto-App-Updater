@@ -1,5 +1,5 @@
 {
-  "version": "2.1.2",
+  "version": "2.2.0",
   "script": "AutoAppUpdater.ps1",
   "sha256": "6e3d40f99ef6c975129581fb30c0e98976be199cb80ef65ea5211ca591e125f2",
   "published": "2026-09-20"
