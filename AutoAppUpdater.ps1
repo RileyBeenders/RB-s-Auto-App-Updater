@@ -20,6 +20,7 @@ $UpdaterVersion = [version]"2.1.1"
 $RepositoryRawBase = "https://raw.githubusercontent.com/RileyBeenders/RB-s-Auto-App-Updater/main"
 $VersionManifestUrl = "$RepositoryRawBase/version.json"
 $UpdaterScriptUrl = "$RepositoryRawBase/AutoAppUpdater.ps1"
+$ShortcutIconUrl = "$RepositoryRawBase/icon.png"
 
 # ------------------------------------------------------------
 # Elevate this setup script once
@@ -53,6 +54,7 @@ $AppFolder     = Join-Path $env:LOCALAPPDATA "WingetUpdater"
 $LauncherPath  = Join-Path $AppFolder "WingetUpdater.ps1"
 $DesktopPath   = [Environment]::GetFolderPath("Desktop")
 $ShortcutPath  = Join-Path $DesktopPath "App Auto Updater.lnk"
+$IconPath      = Join-Path $AppFolder "AppAutoUpdater.ico"
 
 # The elevated worker is stored in Program Files. Standard,
 # non-elevated processes cannot modify it without UAC approval.
@@ -1642,6 +1644,112 @@ if (-not $SelfUpdate) {
 }
 
 # ============================================================
+# BUILD SHORTCUT ICON
+# ============================================================
+
+# Shortcuts cannot use a PNG directly, so icon.png from the
+# repository is downloaded and packed into a multi-size .ico.
+# If anything fails, the shortcut falls back to the PowerShell icon.
+
+$ShortcutIconLocation = "$PowerShellExe,0"
+$IconSourcePath = Join-Path $env:TEMP "RB-App-Auto-Updater-icon.png"
+
+try {
+    Write-Host "Downloading shortcut icon..." -ForegroundColor Cyan
+
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+
+    Invoke-WebRequest `
+        -Uri $ShortcutIconUrl `
+        -OutFile $IconSourcePath `
+        -UseBasicParsing `
+        -Headers @{ "User-Agent" = "RB-App-Auto-Updater" } `
+        -TimeoutSec 15
+
+    Add-Type -AssemblyName System.Drawing
+
+    $SourceImage = [System.Drawing.Image]::FromFile($IconSourcePath)
+
+    try {
+        # Each entry is stored as PNG data, which Windows Vista and
+        # later accept inside .ico files. Largest size goes first.
+        $IconSizes = @(256, 128, 64, 48, 32, 24, 16)
+        $IconFrames = New-Object System.Collections.Generic.List[byte[]]
+
+        foreach ($Size in $IconSizes) {
+            $Frame = New-Object System.Drawing.Bitmap $Size, $Size
+            $Graphics = [System.Drawing.Graphics]::FromImage($Frame)
+
+            try {
+                $Graphics.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+                $Graphics.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::HighQuality
+                $Graphics.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
+                $Graphics.Clear([System.Drawing.Color]::Transparent)
+                $Graphics.DrawImage($SourceImage, 0, 0, $Size, $Size)
+
+                $FrameStream = New-Object System.IO.MemoryStream
+                $Frame.Save($FrameStream, [System.Drawing.Imaging.ImageFormat]::Png)
+                $IconFrames.Add($FrameStream.ToArray())
+                $FrameStream.Dispose()
+            }
+            finally {
+                $Graphics.Dispose()
+                $Frame.Dispose()
+            }
+        }
+    }
+    finally {
+        $SourceImage.Dispose()
+    }
+
+    $IconStream = New-Object System.IO.MemoryStream
+    $IconWriter = New-Object System.IO.BinaryWriter $IconStream
+
+    # ICONDIR header: reserved, type (1 = icon), image count
+    $IconWriter.Write([uint16]0)
+    $IconWriter.Write([uint16]1)
+    $IconWriter.Write([uint16]$IconFrames.Count)
+
+    $DataOffset = 6 + (16 * $IconFrames.Count)
+
+    for ($Index = 0; $Index -lt $IconFrames.Count; $Index++) {
+        $Size = $IconSizes[$Index]
+        $SizeByte = if ($Size -ge 256) { [byte]0 } else { [byte]$Size }
+
+        # ICONDIRENTRY: width, height, palette, reserved,
+        # planes, bit depth, data length, data offset
+        $IconWriter.Write($SizeByte)
+        $IconWriter.Write($SizeByte)
+        $IconWriter.Write([byte]0)
+        $IconWriter.Write([byte]0)
+        $IconWriter.Write([uint16]1)
+        $IconWriter.Write([uint16]32)
+        $IconWriter.Write([uint32]$IconFrames[$Index].Length)
+        $IconWriter.Write([uint32]$DataOffset)
+
+        $DataOffset += $IconFrames[$Index].Length
+    }
+
+    foreach ($FrameBytes in $IconFrames) {
+        $IconWriter.Write($FrameBytes)
+    }
+
+    $IconWriter.Flush()
+    [System.IO.File]::WriteAllBytes($IconPath, $IconStream.ToArray())
+    $IconWriter.Dispose()
+    $IconStream.Dispose()
+
+    $ShortcutIconLocation = "$IconPath,0"
+}
+catch {
+    Write-Host "Could not prepare the custom shortcut icon: $($_.Exception.Message)" -ForegroundColor Yellow
+    Write-Host "The shortcut will use the default PowerShell icon." -ForegroundColor Yellow
+}
+finally {
+    Remove-Item $IconSourcePath -Force -ErrorAction SilentlyContinue
+}
+
+# ============================================================
 # CREATE DESKTOP SHORTCUT
 # ============================================================
 
@@ -1651,7 +1759,7 @@ $Shortcut = $Shell.CreateShortcut($ShortcutPath)
 $Shortcut.TargetPath = $PowerShellExe
 $Shortcut.Arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$LauncherPath`""
 $Shortcut.WorkingDirectory = $AppFolder
-$Shortcut.IconLocation = "$PowerShellExe,0"
+$Shortcut.IconLocation = $ShortcutIconLocation
 $Shortcut.Save()
 
 # ============================================================

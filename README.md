@@ -4,7 +4,7 @@ A Windows PowerShell utility that checks installed applications with WinGet, pre
 
 ## Features
 
-- Desktop shortcut with no UAC prompt during normal app updates
+- Desktop shortcut with a custom icon and no UAC prompt during normal app updates
 - Live package-level progress and elapsed time
 - Human-readable WinGet error explanations
 - Automatic non-elevated retry for per-user installers
@@ -28,6 +28,12 @@ The setup installs protected worker scripts under:
 ```text
 %ProgramFiles%\RB App Auto Updater
 ```
+
+## Shortcut icon
+
+During setup, `icon.png` from this repository is downloaded and converted into a multi-size `.ico` at `%LOCALAPPDATA%\WingetUpdater\AppAutoUpdater.ico`, which the desktop shortcut uses. If the download or conversion fails, setup continues and the shortcut falls back to the standard PowerShell icon.
+
+To change the icon, replace `icon.png` on `main` (a square PNG with transparency, 256x256 or larger is ideal). The icon is not covered by the `version.json` hash, so no version bump is needed for an icon-only change; it is picked up the next time setup or a self-update runs.
 
 ## Self-update behavior
 
