@@ -1,6 +1,6 @@
 {
   "version": "2.1.0",
   "script": "AutoAppUpdater.ps1",
-  "sha256": "d1cf3dc0c4c88636fe9bd6b5a07c0d6eaf3f1395b8d1a85aa83dedf22354e9b2",
+  "sha256": "abf7d13beca33bef1f624b1ddaa8a1460bd0f76062502f7336a3ac344ff3171f",
   "published": "2026-09-20"
 }
